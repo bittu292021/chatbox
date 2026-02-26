@@ -13,8 +13,10 @@ export const ChatProvider = ({ children }) => {
   const [socket, setSocket] = useState(null);
   const [typing, setTyping] = useState('');
 
-  const API_URL = 'http://localhost:5000/api';
-  const SOCKET_URL = 'http://localhost:5000';
+  // Use environment variable for backend URL, fallback to localhost for development
+  const BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+  const API_URL = `${BASE_URL}/api`;
+  const SOCKET_URL = BASE_URL;
 
   // Load saved token
   useEffect(() => {

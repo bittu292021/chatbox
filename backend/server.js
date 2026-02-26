@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const http = require('http');
-const { Server } = require('socket.io');  // ✅ FIXED import
+const { Server } = require('socket.io');
 const connectDB = require('./config/db');
 const authRoutes = require('./routes/authRoutes');
 
@@ -12,51 +12,63 @@ connectDB();
 const app = express();
 const server = http.createServer(app);
 
-// ✅ FIXED Socket.IO setup
-const io = new Server(server, {
-  cors: {
-    origin: process.env.CLIENT_URL || 'http://localhost:3000',
-    methods: ['GET', 'POST']
-  }
-});
+// ✅ Allow multiple origins: from environment variable (comma-separated) plus localhost for dev
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',')
+  : ['http://localhost:3000', 'http://127.0.0.1:3000'];
 
-app.use(cors());
+// Add production frontend URL if CLIENT_URL is set separately
+if (process.env.CLIENT_URL && !allowedOrigins.includes(process.env.CLIENT_URL)) {
+  allowedOrigins.push(process.env.CLIENT_URL);
+}
+
+// CORS middleware for HTTP
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (like mobile apps or curl)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true
+}));
+
 app.use(express.json());
 
-// ✅ FIXED: Remove duplicate route - use ONLY ONE
-app.use('/api/auth', authRoutes);  // ← SINGLE LINE
+// Routes
+app.use('/api/auth', authRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'Server running', socketio: true });
 });
 
-// ✅ COMPLETE Socket.IO events for chat app
+// ✅ Socket.IO with same allowed origins
+const io = new Server(server, {
+  cors: {
+    origin: allowedOrigins,
+    methods: ['GET', 'POST'],
+    credentials: true
+  }
+});
+
+// Socket events (as updated earlier)
 io.on('connection', (socket) => {
   console.log(`👤 User connected: ${socket.id}`);
-  
-  // Join user room
-  socket.on('join', (userId) => {
+
+  socket.on('user_join', (userId) => {
     socket.join(userId);
     console.log(`📡 User ${userId} joined room`);
-    // Broadcast user online status
     socket.broadcast.emit('userOnline', userId);
   });
-  
-  // Send message
-  socket.on('sendMessage', (data) => {
-    console.log(`💬 Message from ${data.from} to ${data.to}:`, data.message);
-    io.to(data.to).emit('receiveMessage', data);
+
+  socket.on('send_message', (data) => {
+    console.log(`💬 Message from ${data.senderId} to ${data.receiverId}: ${data.text}`);
+    io.to(data.receiverId).emit('receive_message', data);
   });
-  
-  // Typing indicator
-  socket.on('typing', (data) => {
-    socket.broadcast.to(data.to).emit('userTyping', data);
-  });
-  
-  socket.on('stopTyping', (data) => {
-    socket.broadcast.to(data.to).emit('stopTyping');
-  });
-  
+
   socket.on('disconnect', () => {
     console.log(`👤 User disconnected: ${socket.id}`);
     io.emit('userOffline', socket.id);
