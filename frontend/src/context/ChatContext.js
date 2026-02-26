@@ -12,6 +12,7 @@ export const ChatProvider = ({ children }) => {
   const [messages, setMessages] = useState([]);
   const [socket, setSocket] = useState(null);
   const [typing, setTyping] = useState('');
+  const [onlineUsers, setOnlineUsers] = useState([]); // Track online user IDs
 
   // Use environment variable for backend URL, fallback to localhost for development
   const BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
@@ -34,35 +35,66 @@ export const ChatProvider = ({ children }) => {
     }
   }, [token]);
 
-  // Socket connection
+  // Socket connection and event listeners
   useEffect(() => {
     if (token && user) {
+      console.log('🔌 Connecting socket with user:', user);
       const newSocket = io(SOCKET_URL);
-      newSocket.emit('user_join', user.id);
 
+      newSocket.on('connect', () => {
+        console.log('✅ Socket connected, emitting user_join with userId:', user._id);
+        newSocket.emit('user_join', user._id); // Use _id (MongoDB default)
+      });
+
+      // Incoming message
       newSocket.on('receive_message', (message) => {
+        console.log('📩 Received message:', message);
         setMessages(prev => [...prev, message]);
       });
 
-      newSocket.on('user_typing', (senderName) => {
-        setTyping(`${senderName} is typing...`);
+      // Typing indicators
+      newSocket.on('user_typing', (data) => {
+        console.log('✏️ Typing event:', data);
+        if (data.senderId === selectedUser?._id) {
+          setTyping(`${data.senderName} is typing...`);
+        }
       });
 
       newSocket.on('user_stop_typing', () => {
         setTyping('');
       });
 
+      // Online/offline events
+      newSocket.on('userOnline', (userId) => {
+        console.log('🟢 User online:', userId);
+        setOnlineUsers(prev => [...prev, userId]);
+      });
+
+      newSocket.on('userOffline', (userId) => {
+        console.log('🔴 User offline:', userId);
+        setOnlineUsers(prev => prev.filter(id => id !== userId));
+      });
+
+      // Error handling
+      newSocket.on('connect_error', (err) => {
+        console.error('❌ Socket connection error:', err.message);
+      });
+
       setSocket(newSocket);
 
-      return () => newSocket.disconnect();
+      return () => {
+        console.log('🔌 Disconnecting socket');
+        newSocket.disconnect();
+      };
     }
-  }, [user, token]);
+  }, [user, token, selectedUser]); // selectedUser needed for typing
 
   const loadProfile = async () => {
     try {
       const res = await axios.get(`${API_URL}/auth/me`, {
         headers: { Authorization: `Bearer ${token}` }
       });
+      console.log('👤 Profile loaded:', res.data);
       setUser(res.data);
     } catch (error) {
       console.error('Profile load error:', error);
@@ -76,6 +108,7 @@ export const ChatProvider = ({ children }) => {
       const res = await axios.get(`${API_URL}/auth/users`, {
         headers: { Authorization: `Bearer ${token}` }
       });
+      console.log('👥 Users loaded:', res.data);
       setUsers(res.data);
     } catch (error) {
       console.error('Users load error:', error);
@@ -91,6 +124,7 @@ export const ChatProvider = ({ children }) => {
       localStorage.setItem('token', newToken);
       setToken(newToken);
       setUser(res.data.user);
+      console.log('✅ Registered user:', res.data.user);
       return { success: true };
     } catch (error) {
       return { success: false, message: error.response?.data?.message };
@@ -106,6 +140,7 @@ export const ChatProvider = ({ children }) => {
       localStorage.setItem('token', newToken);
       setToken(newToken);
       setUser(res.data.user);
+      console.log('✅ Logged in user:', res.data.user); // Check if user has _id or id
       return { success: true };
     } catch (error) {
       return { success: false, message: error.response?.data?.message };
@@ -118,21 +153,48 @@ export const ChatProvider = ({ children }) => {
     setUser(null);
     setUsers([]);
     setSocket(null);
+    setOnlineUsers([]);
+  };
+
+  // Send message function
+  const sendMessage = (text) => {
+    if (socket && selectedUser && user) {
+      const messageData = {
+        senderId: user._id,      // Use _id
+        receiverId: selectedUser._id,
+        text
+      };
+      console.log('📤 Sending message:', messageData);
+      socket.emit('send_message', messageData);
+    }
+  };
+
+  // Typing functions
+  const startTyping = () => {
+    if (socket && selectedUser && user) {
+      socket.emit('typing', {
+        senderId: user._id,
+        receiverId: selectedUser._id,
+        senderName: user.username
+      });
+    }
+  };
+
+  const stopTyping = () => {
+    if (socket && selectedUser) {
+      socket.emit('stop_typing', {
+        receiverId: selectedUser._id
+      });
+    }
   };
 
   return (
     <ChatContext.Provider value={{
-      user, token, users, selectedUser, messages, typing, socket,
-      register, login, logout, setSelectedUser, 
-      sendMessage: (text) => {
-        if (socket && selectedUser && user) {
-          socket.emit('send_message', {
-            senderId: user.id,
-            receiverId: selectedUser.id,
-            text
-          });
-        }
-      }
+      user, token, users, selectedUser, messages, typing, socket, onlineUsers,
+      register, login, logout, setSelectedUser,
+      sendMessage,
+      startTyping,
+      stopTyping
     }}>
       {children}
     </ChatContext.Provider>
